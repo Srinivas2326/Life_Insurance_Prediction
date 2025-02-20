@@ -26,11 +26,15 @@ def train_model():
     model = XGBClassifier(eval_metric='logloss')
     model.fit(X, y)
 
+    # Predict on training data and calculate accuracy
+    y_pred = model.predict(X)
+    accuracy = accuracy_score(y, y_pred)
+
     # Train the premium model using XGBoost
     premium_model = XGBRegressor()
     premium_model.fit(X, data['Premium_Amount'])
 
-    return model, premium_model, label_encoders
+    return model, premium_model, label_encoders, accuracy
 
 def predict_insurance():
     st.title("🏦 Life Insurance Eligibility & Premium Prediction")
@@ -49,7 +53,7 @@ def predict_insurance():
     health_status = st.selectbox("Select Health Status", ["Excellent", "Good", "Average", "Poor"])
 
     if st.button("Predict Eligibility"):
-        model, premium_model, label_encoders = train_model()
+        model, premium_model, label_encoders, accuracy = train_model()
 
         input_data = pd.DataFrame([[age, gender, income, health_status, smoking, 'Term']],
                                    columns=['Age', 'Gender', 'Income', 'Health_Status', 'Smoking_Habit', 'Policy_Type'])
@@ -79,6 +83,9 @@ def predict_insurance():
         st.write("Estimated Premiums:")
         for policy, premium in premium_estimates.items():
             st.write(f"- {policy}: {premium:.2f}")
+
+        # Display model accuracy
+        st.write(f"📊 **Model Accuracy:** {accuracy:.2%}")
 
 if __name__ == "__main__":
     predict_insurance()
