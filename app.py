@@ -1,110 +1,84 @@
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import RandomForestClassifier
+from xgboost import XGBClassifier, XGBRegressor
 from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import accuracy_score
-from sklearn.model_selection import train_test_split
+import streamlit as st
 
 def train_model():
     # Load dataset and define features and target
     data = pd.read_csv('life_insurance_prediction.csv')
-    features = ['Age', 'Gender', 'Income', 'Health_Status', 'Smoking_Habit', 'Family_History', 'Policy_Type']
+    features = ['Age', 'Gender', 'Income', 'Health_Status', 'Smoking_Habit', 'Policy_Type']
     target = 'Prediction_Target'
 
-    # Standardize the categorical columns to have consistent case
-    for col in ['Gender', 'Health_Status', 'Smoking_Habit', 'Family_History', 'Policy_Type']:
-        data[col] = data[col].str.capitalize()
+    # Prepare data for training
+    X = data[features].copy()
+    y = data[target]
 
     # Label encode categorical columns
     label_encoders = {}
-    for col in ['Gender', 'Health_Status', 'Smoking_Habit', 'Family_History', 'Policy_Type']:
+    for col in ['Gender', 'Health_Status', 'Smoking_Habit', 'Policy_Type']:
         le = LabelEncoder()
-        data[col] = le.fit_transform(data[col])
+        X[col] = le.fit_transform(X[col].astype(str))
         label_encoders[col] = le
 
-    # Define X and y
-    X = data[features]
-    y = data[target]
+    # Train the model using XGBoost
+    model = XGBClassifier(eval_metric='logloss')
+    model.fit(X, y)
 
-    # Split data into train and test sets
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    # Train the premium model using XGBoost
+    premium_model = XGBRegressor()
+    premium_model.fit(X, data['Premium_Amount'])
 
-    # Train the eligibility model
-    model = RandomForestClassifier(random_state=42)
-    model.fit(X_train, y_train)
-
-    # Calculate accuracy
-    y_pred = model.predict(X_test)
-    accuracy = accuracy_score(y_test, y_pred)
-
-    # Train the premium model
-    premium_model = RandomForestClassifier(random_state=42)
-    premium_model.fit(X_train, data.loc[X_train.index, 'Premium_Amount'])
-
-    return model, premium_model, label_encoders, accuracy
-
-def get_user_input():
-    # Collect user inputs
-    age = int(input("Enter age: "))
-    gender = input("Enter gender (Male/Female): ").capitalize()
-    income = float(input("Enter income: "))
-    health_status = input("Enter health status (Excellent/Good/Average/Poor): ").capitalize()
-    smoking = input("Do you smoke? (Yes/No): ").capitalize()
-    family_history = input("Do you have a family history of illness? (Yes/No): ").capitalize()
-
-    return age, gender, income, health_status, smoking, family_history
+    return model, premium_model, label_encoders
 
 def predict_insurance():
-    # Get user inputs
-    age, gender, income, health_status, smoking, family_history = get_user_input()
+    st.title("🏦 Life Insurance Eligibility & Premium Prediction")
 
-    # Train the model
-    model, premium_model, label_encoders, accuracy = train_model()
+    with st.container():
+        age = st.slider("Select Age", 1, 100, 30)
+        income = st.number_input("Enter Income", min_value=0.0, step=1000.0)
 
-    # Prepare input data for prediction
-    input_data = pd.DataFrame([[age, gender, income, health_status, smoking, family_history, 'None']],
-                               columns=['Age', 'Gender', 'Income', 'Health_Status', 'Smoking_Habit', 'Family_History', 'Policy_Type'])
+    with st.container():
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            gender = st.radio("Select Gender", ["Male", "Female"], horizontal=True)
+        with col2:
+            smoking = st.radio("Do you smoke?", ["Yes", "No"], horizontal=True)
 
-    # Encode categorical inputs
-    for col in label_encoders:
-        if col != 'Policy_Type':  # Don't encode 'Policy_Type' yet
-            input_data[col] = label_encoders[col].transform(input_data[col])
+    health_status = st.selectbox("Select Health Status", ["Excellent", "Good", "Average", "Poor"])
 
-    # Placeholder for 'Policy_Type'
-    input_data['Policy_Type'] = 0  
+    if st.button("Predict Eligibility"):
+        model, premium_model, label_encoders = train_model()
 
-    # Make eligibility prediction
-    prediction = model.predict(input_data)
+        input_data = pd.DataFrame([[age, gender, income, health_status, smoking, 'Term']],
+                                   columns=['Age', 'Gender', 'Income', 'Health_Status', 'Smoking_Habit', 'Policy_Type'])
 
-    # Here '0' means eligible and '1' means not eligible
-    if prediction[0] == 0:
-        eligible_policies = []
+        for col, le in label_encoders.items():
+            input_data[col] = le.transform(input_data[col].astype(str))
+
         if income > 100000 and health_status == 'Excellent':
             eligible_policies = ['Whole', 'Universal', 'Term']
         elif income > 50000 and health_status in ['Good', 'Average']:
             eligible_policies = ['Universal', 'Term']
-        else:
+        elif income > 5000:
             eligible_policies = ['Term']
+        else:
+            st.error("❌ Not Eligible for Insurance")
+            st.write("Reason: Income is below the minimum threshold of 5000")
+            return
 
-        # Estimate premiums for eligible policies
         premium_estimates = {}
         for policy in eligible_policies:
-            input_data['Policy_Type'] = label_encoders['Policy_Type'].transform([policy])[0]
+            policy_encoded = label_encoders['Policy_Type'].transform([policy])[0]
+            input_data['Policy_Type'] = policy_encoded
             premium_estimates[policy] = premium_model.predict(input_data)[0]
 
-        return "Eligible", eligible_policies, premium_estimates, accuracy
+        st.success("🎉 Eligible for Insurance")
+        st.write(f"Eligible Policies: {', '.join(eligible_policies)}")
+        st.write("Estimated Premiums:")
+        for policy, premium in premium_estimates.items():
+            st.write(f"- {policy}: {premium:.2f}")
 
-    else:
-        return "Not Eligible", None, None, accuracy
-
-# Example usage
 if __name__ == "__main__":
-    result, eligible_policies, premium_estimates, accuracy = predict_insurance()
-    
-    print(f"Eligibility: {result}")
-
-    if result == "Eligible":
-        print(f"Eligible Policies: {eligible_policies}")
-        print(f"Premium Estimates: {premium_estimates}")
-
-    print(f"Model Accuracy: {accuracy:.2%}")
+    predict_insurance()
