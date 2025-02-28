@@ -25,18 +25,22 @@ def train_model():
     # Train the model using XGBoost
     model = XGBClassifier(eval_metric='logloss')
     model.fit(X, y)
-
+    
+    # Model accuracy
+    y_pred = model.predict(X)
+    accuracy = accuracy_score(y, y_pred)
+    
     # Train the premium model using XGBoost
     premium_model = XGBRegressor()
     premium_model.fit(X, data['Premium_Amount'])
 
-    return model, premium_model, label_encoders
+    return model, premium_model, label_encoders, accuracy
 
 def predict_insurance():
-    st.title("🏦 Life Insurance Eligibility & Premium Prediction")
+    st.title("\U0001F3E6 Life Insurance Eligibility & Premium Prediction")
 
     with st.container():
-        age = st.slider("Select Age", 1, 100, 30)
+        age = st.slider("Select Age", 1, 100, 22)
         income = st.number_input("Enter Income", min_value=0.0, step=1000.0)
 
     with st.container():
@@ -49,7 +53,13 @@ def predict_insurance():
     health_status = st.selectbox("Select Health Status", ["Excellent", "Good", "Average", "Poor"])
 
     if st.button("Predict Eligibility"):
-        model, premium_model, label_encoders = train_model()
+        # Check for underage smoking condition
+        if age < 18 and smoking == "Yes":
+            st.error("❌ Not Eligible for Insurance")
+            st.write("Reason: Underage smoking detected.")
+            return
+
+        model, premium_model, label_encoders, accuracy = train_model()
 
         input_data = pd.DataFrame([[age, gender, income, health_status, smoking, 'Term']],
                                    columns=['Age', 'Gender', 'Income', 'Health_Status', 'Smoking_Habit', 'Policy_Type'])
@@ -74,11 +84,13 @@ def predict_insurance():
             input_data['Policy_Type'] = policy_encoded
             premium_estimates[policy] = premium_model.predict(input_data)[0]
 
-        st.success("🎉 Eligible for Insurance")
+        st.success("\U0001F389 Eligible for Insurance")
         st.write(f"Eligible Policies: {', '.join(eligible_policies)}")
         st.write("Estimated Premiums:")
         for policy, premium in premium_estimates.items():
             st.write(f"- {policy}: {premium:.2f}")
+        
+        st.write(f"Model Accuracy: {accuracy * 100:.2f}%")
 
 if __name__ == "__main__":
     predict_insurance()
