@@ -6,54 +6,38 @@ from sklearn.metrics import accuracy_score
 import streamlit as st
 
 def train_model():
-    # Load dataset and define features and target
     data = pd.read_csv('life_insurance_prediction.csv')
     features = ['Age', 'Gender', 'Income', 'Health_Status', 'Smoking_Habit', 'Policy_Type']
     target = 'Prediction_Target'
 
-    # Prepare data for training
     X = data[features].copy()
     y = data[target]
 
-    # Label encode categorical columns
+    # Encode categorical variables
     label_encoders = {}
     for col in ['Gender', 'Health_Status', 'Smoking_Habit', 'Policy_Type']:
         le = LabelEncoder()
         X[col] = le.fit_transform(X[col].astype(str))
         label_encoders[col] = le
 
-    # Train the model using XGBoost
-    model = XGBClassifier(eval_metric='logloss')
+    model = XGBClassifier(eval_metric='logloss', use_label_encoder=False)
     model.fit(X, y)
-    
-    # Model accuracy
-    y_pred = model.predict(X)
-    accuracy = accuracy_score(y, y_pred)
-    
-    # Train the premium model using XGBoost
+
     premium_model = XGBRegressor()
     premium_model.fit(X, data['Premium_Amount'])
 
-    return model, premium_model, label_encoders, accuracy
+    return model, premium_model, label_encoders, accuracy_score(y, model.predict(X))
 
 def predict_insurance():
     st.title("\U0001F3E6 Life Insurance Eligibility & Premium Prediction")
 
-    with st.container():
-        age = st.slider("Select Age", 1, 100, 22)
-        income = st.number_input("Enter Income", min_value=0.0, step=1000.0)
-
-    with st.container():
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            gender = st.radio("Select Gender", ["Male", "Female"], horizontal=True)
-        with col2:
-            smoking = st.radio("Do you smoke?", ["Yes", "No"], horizontal=True)
-
+    age = st.slider("Select Age", 1, 100, 22)
+    income = st.number_input("Enter Income", min_value=0.0, step=1000.0)
+    gender = st.radio("Select Gender", ["Male", "Female"], horizontal=True)
+    smoking = st.radio("Do you smoke?", ["Yes", "No"], horizontal=True)
     health_status = st.selectbox("Select Health Status", ["Excellent", "Good", "Average", "Poor"])
 
     if st.button("Predict Eligibility"):
-        # Check for underage smoking condition
         if age < 18 and smoking == "Yes":
             st.error("❌ Not Eligible for Insurance")
             st.write("Reason: Underage smoking detected.")
@@ -62,34 +46,52 @@ def predict_insurance():
         model, premium_model, label_encoders, accuracy = train_model()
 
         input_data = pd.DataFrame([[age, gender, income, health_status, smoking, 'Term']],
-                                   columns=['Age', 'Gender', 'Income', 'Health_Status', 'Smoking_Habit', 'Policy_Type'])
+                                    columns=['Age', 'Gender', 'Income', 'Health_Status', 'Smoking_Habit', 'Policy_Type'])
 
-        for col, le in label_encoders.items():
-            input_data[col] = le.transform(input_data[col].astype(str))
+        # Convert categorical values to numerical using trained label encoders
+        for col in ['Gender', 'Health_Status', 'Smoking_Habit', 'Policy_Type']:
+            input_data[col] = label_encoders[col].transform(input_data[col].astype(str))
 
-        if income > 100000 and health_status == 'Excellent':
-            eligible_policies = ['Whole', 'Universal', 'Term']
-        elif income > 50000 and health_status in ['Good', 'Average']:
-            eligible_policies = ['Universal', 'Term']
-        elif income > 5000:
-            eligible_policies = ['Term']
-        else:
+        # Define policy eligibility rules in a DataFrame
+        eligibility_df = pd.DataFrame({
+            "Policy_Type": ["Whole", "Universal", "Term"],
+            "Min_Income": [100000, 50000, 5000],
+            "Allowed_Health": [["Excellent"], ["Good", "Average"], ["Poor", "Good", "Average"]]
+        })
+
+        # Filter eligibility based on health status and income
+        eligibility_df = eligibility_df.explode("Allowed_Health")
+        eligible_policies = eligibility_df[
+            (income >= eligibility_df["Min_Income"]) & (eligibility_df["Allowed_Health"] == health_status)
+        ]["Policy_Type"].tolist()
+
+        if health_status == "Excellent":
+            income_ranges = [100000, 50000, 5000]  # Define income thresholds
+            policy_mapping = {100000: ["Whole", "Universal", "Term"], 
+                              50000: ["Universal", "Term"], 
+                              5000: ["Term"]}
+            eligible_policies = next((p for inc, p in policy_mapping.items() if income >= inc), [])
+
+        if not eligible_policies:
             st.error("❌ Not Eligible for Insurance")
-            st.write("Reason: Income is below the minimum threshold of 5000")
+            st.write("Reason: Income below minimum or Health Status not eligible.")
             return
 
+        # Predict premiums
         premium_estimates = {}
         for policy in eligible_policies:
-            policy_encoded = label_encoders['Policy_Type'].transform([policy])[0]
-            input_data['Policy_Type'] = policy_encoded
-            premium_estimates[policy] = premium_model.predict(input_data)[0]
+            temp_input = pd.DataFrame([[age, gender, income, health_status, smoking, policy]],
+                                       columns=['Age', 'Gender', 'Income', 'Health_Status', 'Smoking_Habit', 'Policy_Type'])
+            for col in ['Gender', 'Health_Status', 'Smoking_Habit', 'Policy_Type']:
+                temp_input[col] = label_encoders[col].transform(temp_input[col].astype(str))
+            premium_estimates[policy] = premium_model.predict(temp_input)[0]
 
         st.success("\U0001F389 Eligible for Insurance")
         st.write(f"Eligible Policies: {', '.join(eligible_policies)}")
         st.write("Estimated Premiums:")
         for policy, premium in premium_estimates.items():
             st.write(f"- {policy}: {premium:.2f}")
-        
+
         st.write(f"Model Accuracy: {accuracy * 100:.2f}%")
 
 if __name__ == "__main__":
